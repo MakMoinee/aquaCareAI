@@ -3,3 +3,5 @@ Lib
 Scripts
 pyvenv.cfg
 train
+*.jpg
+*.h5
