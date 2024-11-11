@@ -59,12 +59,12 @@ predictions = Dense(1, activation='sigmoid')(x)  # Use a single neuron with sigm
 model = Model(inputs=base_model.input, outputs=predictions)
 
 # Compile the model
-model.compile(optimizer=Adam(learning_rate=0.001),
+model.compile(optimizer=Adam(learning_rate=0.0001),
               loss='binary_crossentropy',
               metrics=['accuracy'])
 
 # Train the model
-epochs = 10
+epochs = 20
 history = model.fit(
     train_dataset,
     validation_data=val_dataset,
@@ -76,12 +76,12 @@ for layer in base_model.layers:
     layer.trainable = True
 
 # Re-compile with a lower learning rate for fine-tuning
-model.compile(optimizer=Adam(learning_rate=0.0001),
+model.compile(optimizer=Adam(learning_rate=0.1),
               loss='binary_crossentropy',
               metrics=['accuracy'])
 
 # Fine-tune the model
-fine_tune_epochs = 10
+fine_tune_epochs = 20
 total_epochs = epochs + fine_tune_epochs
 
 history_fine = model.fit(

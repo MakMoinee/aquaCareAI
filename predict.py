@@ -10,7 +10,7 @@ model_path = 'result.h5'
 model = load_model(model_path)
 
 # Path to the input image for white spot detection
-image_path = './train/path/to/input_image.jpg'
+image_path = '1.jpg'
 
 # Image size (same as the input size used during training)
 img_size = (299, 299)
@@ -25,7 +25,10 @@ def detect_white_spot(image_path):
     
     # Make a prediction
     prediction = model.predict(img_array)
-    
+    # prediction = prediction[0] * 1000
+    print("Prediction: ")
+    print(prediction[0])
+    print("\n")
     # Interpret the result
     if prediction[0] > 0.5:
         print("White spot disease detected")
