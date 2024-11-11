@@ -2,39 +2,53 @@
 import io
 import torch
 from PIL import Image
-from quart import Quart, jsonify, request
-from yolov5.models.common import DetectMultiBackend
-from yolov5.utils.torch_utils import select_device
+from flask import Flask, request, jsonify
+import pathlib
+temp = pathlib.PosixPath
+pathlib.PosixPath = pathlib.WindowsPath
+# from yolov5.models.common import DetectMultiBackend
+# from yolov5.utils.torch_utils import select_device
 
-app = Quart(__name__)
+app = Flask(__name__)
 
-# Load the YOLOv5 model
-device = select_device('')
-model = DetectMultiBackend('yolov5s.pt', device=device)  # Replace 'yolov5s.pt' with your model path
-model.eval()  # Set model to evaluation mode
+# device = select_device('')
+model = torch.hub.load('ultralytics/yolov5', 'custom', path='./result.pt')
+# model.eval()  # Set model to evaluation mode
 
 @app.route('/detect', methods=['POST'])
-async def detect():
-    if not request.files.get("image"):
-        return jsonify({"error": "No image uploaded"}), 400
+def detect():
+    form =  request.form
+    if 'image' not in form:
+        return jsonify({"error": "No image url"}), 400
 
     # Read the image from the request
-    image_file = await request.files["image"].read()
-    image = Image.open(io.BytesIO(image_file))
-
+    image = request.form['image']
+    print(image)
     # Preprocess image and run YOLO model
-    img = image.convert("RGB")
-    results = model(img)  # Run the model on the image
+    # img = image.convert("RGB")
+    results = model(image)  # Run the model on the image
 
     # Parse the results (bounding boxes, labels, confidence scores)
     detections = []
-    for *box, conf, cls in results.xyxy[0]:  # xyxy format
+    numberOfWhiteSpots =0 
+    try:
+        # Convert results to a Pandas DataFrame
+        df = results.pandas().xyxy[0]
+
+        # Get the number of detected objects
+        numberOfWhiteSpots = df.shape[0]
+        print(numberOfWhiteSpots)
         detection = {
-            "bbox": [round(x, 2) for x in box],  # Bounding box coordinates
-            "confidence": round(float(conf), 2),
-            "class": int(cls)
+            "whiteSpotCount": numberOfWhiteSpots
         }
         detections.append(detection)
+
+
+    except Exception as e:
+        print("Error:", str(e))
+
+    if numberOfWhiteSpots>0:
+        results.save(save_dir="./results/",exist_ok=True)
 
     return jsonify({"detections": detections})
 

@@ -6,3 +6,4 @@ train
 *.jpg
 *.h5
 share
+results
