@@ -1,3 +1,6 @@
 tensorflow==2.8.2
 numpy==1.22.4
-Pillow
+pillow
+torch
+flask
+torchvision
