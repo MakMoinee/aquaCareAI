@@ -5,77 +5,85 @@ from PIL import Image
 from flask import Flask, request, jsonify, send_file
 import os
 import pathlib
+import logging
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from flask_cors import CORS
+from contextlib import redirect_stdout
+
+# Set up logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Suppress torch hub's internal messages
+torch.hub._verbose = False
+
+# Modify pathlib for compatibility
 temp = pathlib.PosixPath
 pathlib.PosixPath = pathlib.WindowsPath
-from concurrent.futures import ThreadPoolExecutor
-from flask_cors import CORS  # Import CORS
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:8443"]) 
+CORS(app, origins=["http://localhost:8443"])
 
-# device = select_device('')
-model = torch.hub.load('ultralytics/yolov5', 'custom', path='./result.pt')
+# Load the model without showing cache loading and model summary
+with redirect_stdout(io.StringIO()):  # Suppress YOLOv5 stdout messages
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path='./result.pt', verbose=False)
+
 executor = ThreadPoolExecutor()
 
 @app.route('/detect', methods=['POST'])
 def detect():
-    form =  request.form
-    if 'image' not in form:
+    if 'image' not in request.form:
+        logger.info("Received request without image URL in /detect")
         return jsonify({"error": "No image url"}), 400
 
-    # Read the image from the request
+    # Log when an image URL is received for detection
     image = request.form['image']
-    print(image)
-    detections = []
-    detection = {
-        "detection": "in progress"
-    }
-    detections.append(detection)
+    logger.info("Received image URL for detection in /detect")
+
+    # Indicate detection process started
+    detections = [{"detection": "in progress"}]
     executor.submit(do_object_detection, image)
 
     return jsonify({"detections": detections})
 
 def do_object_detection(image):
-    results = model(image)
-    detections = []
-    numberOfWhiteSpots =0 
     try:
-        # Convert results to a Pandas DataFrame
+        results = model(image)
         df = results.pandas().xyxy[0]
-
-        # Get the number of detected objects
         numberOfWhiteSpots = df.shape[0]
-        print(numberOfWhiteSpots)
-
-
+        
+        if numberOfWhiteSpots > 0:
+            results.save(save_dir="./results/", exist_ok=True)
+            logger.info(f"Detected {numberOfWhiteSpots} white spots and saved results.")
+        else:
+            logger.info("No white spots detected.")
     except Exception as e:
-        print("Error:", str(e))
-
-    if numberOfWhiteSpots>0:
-        results.save(save_dir="./results/",exist_ok=True)
-
-
+        logger.error(f"Error during detection: {e}")
 
 @app.route('/show_results', methods=['GET'])
 def show_results():
-    images = []
     results_dir = "./results"
+    images = [filename for filename in os.listdir(results_dir)
+              if filename.endswith(('.png', '.jpg', '.jpeg'))] if os.path.exists(results_dir) else []
     
-    # List all images in the results folder
-    if os.path.exists(results_dir):
-        for filename in os.listdir(results_dir):
-            if filename.endswith(('.png', '.jpg', '.jpeg')):
-                images.append(filename)
-                
+    logger.info("Accessed /show_results to list saved images.")
     return jsonify({"images": images})
 
 @app.route('/display_image/<filename>')
 def display_image(filename):
     try:
         img_path = os.path.join("./results", filename)
+        logger.info(f"Displaying image: {filename} from /display_image")
         return send_file(img_path, mimetype='image/jpeg')
     except Exception as e:
+        logger.error(f"Error displaying image {filename}: {e}")
         return jsonify({"error": str(e)}), 404
 
 if __name__ == "__main__":
+    # Set Flask to only log critical errors
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    logger.info("Starting API server...")
     app.run()
