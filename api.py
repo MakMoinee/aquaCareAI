@@ -28,6 +28,7 @@ CORS(app, origins=["http://localhost:8443"])
 # Load the model without showing cache loading and model summary
 with redirect_stdout(io.StringIO()):  # Suppress YOLOv5 stdout messages
     model = torch.hub.load('ultralytics/yolov5', 'custom', path='./result.pt', verbose=False)
+    model2 = torch.hub.load('ultralytics/yolov5', 'custom', path='./human.pt', verbose=False)
 
 executor = ThreadPoolExecutor()
 
@@ -48,16 +49,26 @@ def detect():
     return jsonify({"detections": detections})
 
 def do_object_detection(image):
+    
     try:
-        results = model(image)
-        df = results.pandas().xyxy[0]
-        numberOfWhiteSpots = df.shape[0]
+        results2 = model2(image)
+        df2 = results2.pandas().xyxy[0]
+        check = df2.shape[0]
         
-        if numberOfWhiteSpots > 0:
-            results.save(save_dir="./results/", exist_ok=True)
-            logger.info(f"Detected {numberOfWhiteSpots} white spots and saved results.")
+        if check > 0:
+            logger.info(f"Detected {check} humans and other stuff in picture.")
         else:
-            logger.info("No white spots detected.")
+            try:
+                results = model(image)
+                df = results.pandas().xyxy[0]
+                numberOfWhiteSpots = df.shape[0]
+                if numberOfWhiteSpots > 0:
+                    results.save(save_dir="./results/", exist_ok=True)
+                    logger.info(f"Detected {numberOfWhiteSpots} white spots and saved results.")
+                else:
+                    logger.info("No white spots detected.")
+            except Exception as e:
+                logger.error(f"Error during detection: {e}")
     except Exception as e:
         logger.error(f"Error during detection: {e}")
 

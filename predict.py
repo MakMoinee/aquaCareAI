@@ -4,7 +4,7 @@ from tensorflow.keras.preprocessing import image
 import numpy as np
 
 # Path to the saved model
-model_path = 'result.h5'
+model_path = 'white_spot_detection_model_xception.h5'
 
 # Load the trained model
 model = load_model(model_path)

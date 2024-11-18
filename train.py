@@ -1,98 +1,114 @@
+import pandas as pd
+import numpy as np
+import random
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import Dense
 import tensorflow as tf
-from tensorflow.keras.applications.xception import Xception
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-import os
-import xml.etree.ElementTree as ET
+import pickle
+import time
 
-# Define paths to your dataset
-image_dir = './train/images'
-label_dir = './train/labels'
-img_size = (299, 299)  # Xception expects 299x299 images
-batch_size = 32
+# Set random seeds for reproducibility
+seed_value = 42
+np.random.seed(seed_value)
+random.seed(seed_value)
+tf.random.set_seed(seed_value)
 
-# Function to parse labels from XML (adjust if labels are in a different format)
-def parse_label_from_xml(label_path):
-    tree = ET.parse(label_path)
-    root = tree.getroot()
-    # Example assumes binary classification with 'disease' and 'healthy' labels
-    for obj in root.findall('object'):
-        label = obj.find('name').text
-        return 1 if label == 'disease' else 0
-    return 0
+# Load the data
+data = pd.read_csv('train_data.csv')
+data.columns = data.columns.str.strip()
 
-# Function to create dataset
-def create_dataset(image_dir, label_dir, subset):
-    image_paths = sorted([os.path.join(image_dir, subset, fname) for fname in os.listdir(os.path.join(image_dir, subset)) if fname.endswith('.jpg')])
-    label_paths = sorted([os.path.join(label_dir, subset, fname.replace('.jpg', '.xml')) for fname in os.listdir(os.path.join(image_dir, subset)) if fname.endswith('.jpg')])
+# Convert the Date column to datetime
+data['Date Logs'] = pd.to_datetime(data['Date Logs'], format='%m/%d/%Y')
 
-    images = []
-    labels = []
+# Check for missing values
+if data.isnull().values.any():
+    data = data.dropna()
 
-    for img_path, lbl_path in zip(image_paths, label_paths):
-        img = tf.image.resize(tf.image.decode_jpeg(tf.io.read_file(img_path)), img_size)
-        label = parse_label_from_xml(lbl_path)
-        images.append(img)
-        labels.append(label)
+# Sort the data by date
+data = data.sort_values('Date Logs')
 
-    dataset = tf.data.Dataset.from_tensor_slices((images, labels))
-    dataset = dataset.shuffle(buffer_size=len(images)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    return dataset
+data = pd.get_dummies(
+    data, columns=['Month', 'Weekday or Weekend', 'Type of Day'])
+data.columns = data.columns.str.strip()
 
-# Create training and validation datasets
-train_dataset = create_dataset(image_dir, label_dir, 'train')
-val_dataset = create_dataset(image_dir, label_dir, 'val')
+# Select relevant features
+features = ['Month_April', 'Month_August', 'Month_December', 'Month_February', 
+            'Month_January', 'Month_July', 'Month_June', 'Month_March', 
+            'Month_May', 'Month_November', 'Month_October', 'Month_September',
+            'Weekday or Weekend_Weekday', 'Weekday or Weekend_Weekend', 
+            'Type of Day_Normal Day', 'Type of Day_Regular Holiday', 
+            'Type of Day_Special Non-working Holiday',
+            'Mean Temperature (Degree Celsius)', 'Rainfall(mm)', 
+            'Relative Humidity (%)', 'Windspeed (m/s)']
+target = 'DemandLoad'
 
-# Load the Xception model with pre-trained ImageNet weights
-base_model = Xception(weights='imagenet', include_top=False, input_shape=(img_size[0], img_size[1], 3))
+# Prepare input and output data
+X = data[features].values
+y = data[target].values
 
-# Freeze the base model
-base_model.trainable = False
+# Normalize the features and the target
+scaler_X = MinMaxScaler()
+X_scaled = scaler_X.fit_transform(X)
 
-# Add custom layers for white spot disease classification
-x = base_model.output
-x = GlobalAveragePooling2D()(x)
-x = Dense(1024, activation='relu')(x)
-predictions = Dense(1, activation='sigmoid')(x)  # Use a single neuron with sigmoid for binary classification
+scaler_y = MinMaxScaler()
+y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
 
-model = Model(inputs=base_model.input, outputs=predictions)
+# Create sequences
+def create_sequences(X, y, time_steps=7):
+    Xs, ys = [], []
+    for i in range(len(X) - time_steps):
+        Xs.append(X[i:i + time_steps])
+        ys.append(y[i + time_steps])
+    return np.array(Xs), np.array(ys)
+
+time_steps = 7
+X_seq, y_seq = create_sequences(X_scaled, y_scaled, time_steps)
+
+# Use all data for training
+X_train, y_train = X_seq, y_seq
+
+# Model
+model = Sequential([
+    Dense(32, activation='relu', input_shape=(
+        X_train.shape[1], X_train.shape[2])),
+    Dense(128, activation='relu'),
+    Dense(32, activation='relu'),
+    Dense(1)  # Output layer
+])
 
 # Compile the model
-model.compile(optimizer=Adam(learning_rate=0.0001),
-              loss='binary_crossentropy',
-              metrics=['accuracy'])
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+model.compile(optimizer=optimizer, loss='mape')
 
-# Train the model
-epochs = 20
-history = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=epochs
-)
+# Record the start time
+start_time = time.time()
 
-# Unfreeze the base model and fine-tune
-for layer in base_model.layers:
-    layer.trainable = True
+# Train the model with callback to record loss over epochs
+history = model.fit(X_train, y_train, epochs=70, batch_size=32, verbose=1)
 
-# Re-compile with a lower learning rate for fine-tuning
-model.compile(optimizer=Adam(learning_rate=0.1),
-              loss='binary_crossentropy',
-              metrics=['accuracy'])
+# Record the end time
+end_time = time.time()
 
-# Fine-tune the model
-fine_tune_epochs = 20
-total_epochs = epochs + fine_tune_epochs
+# Calculate the total training time
+total_training_time = end_time - start_time
+print(f"Total training time: {total_training_time:.2f} seconds")
 
-history_fine = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=total_epochs,
-    initial_epoch=history.epoch[-1]
-)
+# Save the model
+model.save("dbn_model.pt")
 
-# Save the model in the SavedModel format
-model_save_path = 'result.h5'
-model.save(model_save_path, save_format='h5')
+# Save the scalers
+with open('scaler_dbn_X.pkl', 'wb') as f:
+    pickle.dump(scaler_X, f)
+with open('scaler_dbn_y.pkl', 'wb') as f:
+    pickle.dump(scaler_y, f)
 
-print(f"Model saved to {model_save_path}")
+# Save training loss to a CSV file for visualization
+loss_data = pd.DataFrame({
+    "Epoch": range(1, len(history.history['loss']) + 1),
+    "Loss": history.history['loss']
+})
+loss_data.to_csv('training_loss.csv', index=False)
+
+# Output CSV path
+print("Training loss saved to 'training_loss.csv'")
