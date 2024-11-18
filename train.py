@@ -1,114 +1,140 @@
-import pandas as pd
-import numpy as np
-import random
-from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential
-from keras.layers import Dense
 import tensorflow as tf
-import pickle
-import time
+from tensorflow.keras.applications.xception import Xception
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 
-# Set random seeds for reproducibility
-seed_value = 42
-np.random.seed(seed_value)
-random.seed(seed_value)
-tf.random.set_seed(seed_value)
+# Define paths to your dataset
+image_dir = './train/images'
+label_dir = './train/labels'
+img_size = (299, 299)  # Xception expects 299x299 images
+batch_size = 32
 
-# Load the data
-data = pd.read_csv('train_data.csv')
-data.columns = data.columns.str.strip()
+# Function to parse labels from YOLO format
+def parse_label_from_yolo(label_path):
+    with open(label_path, 'r') as f:
+        lines = f.readlines()
+    # Assume binary classification: 0 for 'healthy', 1 for 'disease'
+    for line in lines:
+        class_id = int(line.split()[0])  # The first number in each line is the class ID
+        if class_id == 1:  # If any object is classified as 'disease', label the image as diseased
+            return 1
+    return 0  # Otherwise, label as healthy
 
-# Convert the Date column to datetime
-data['Date Logs'] = pd.to_datetime(data['Date Logs'], format='%m/%d/%Y')
+# Function to create dataset
+def create_dataset(image_dir, label_dir, subset):
+    image_paths = sorted([os.path.join(image_dir, subset, fname) for fname in os.listdir(os.path.join(image_dir, subset)) if fname.endswith('.jpg')])
+    label_paths = sorted([os.path.join(label_dir, subset, fname.replace('.jpg', '.txt')) for fname in os.listdir(os.path.join(image_dir, subset)) if fname.endswith('.jpg')])
 
-# Check for missing values
-if data.isnull().values.any():
-    data = data.dropna()
+    images = []
+    labels = []
 
-# Sort the data by date
-data = data.sort_values('Date Logs')
+    for img_path, lbl_path in zip(image_paths, label_paths):
+        img = tf.image.resize(tf.image.decode_jpeg(tf.io.read_file(img_path)), img_size)
+        label = parse_label_from_yolo(lbl_path)
+        images.append(img)
+        labels.append(label)
 
-data = pd.get_dummies(
-    data, columns=['Month', 'Weekday or Weekend', 'Type of Day'])
-data.columns = data.columns.str.strip()
+    images = tf.stack(images)
+    labels = tf.convert_to_tensor(labels, dtype=tf.float32)
 
-# Select relevant features
-features = ['Month_April', 'Month_August', 'Month_December', 'Month_February', 
-            'Month_January', 'Month_July', 'Month_June', 'Month_March', 
-            'Month_May', 'Month_November', 'Month_October', 'Month_September',
-            'Weekday or Weekend_Weekday', 'Weekday or Weekend_Weekend', 
-            'Type of Day_Normal Day', 'Type of Day_Regular Holiday', 
-            'Type of Day_Special Non-working Holiday',
-            'Mean Temperature (Degree Celsius)', 'Rainfall(mm)', 
-            'Relative Humidity (%)', 'Windspeed (m/s)']
-target = 'DemandLoad'
+    dataset = tf.data.Dataset.from_tensor_slices((images, labels))
+    dataset = dataset.shuffle(buffer_size=len(images)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return dataset
 
-# Prepare input and output data
-X = data[features].values
-y = data[target].values
+# Create training and validation datasets
+train_dataset = create_dataset(image_dir, label_dir, 'train')
+val_dataset = create_dataset(image_dir, label_dir, 'val')
 
-# Normalize the features and the target
-scaler_X = MinMaxScaler()
-X_scaled = scaler_X.fit_transform(X)
+# Load the Xception model with pre-trained ImageNet weights
+base_model = Xception(weights='imagenet', include_top=False, input_shape=(img_size[0], img_size[1], 3))
 
-scaler_y = MinMaxScaler()
-y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
+# Freeze the base model
+base_model.trainable = False
 
-# Create sequences
-def create_sequences(X, y, time_steps=7):
-    Xs, ys = [], []
-    for i in range(len(X) - time_steps):
-        Xs.append(X[i:i + time_steps])
-        ys.append(y[i + time_steps])
-    return np.array(Xs), np.array(ys)
+# Add custom layers for white spot disease classification
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+predictions = Dense(1, activation='sigmoid')(x)  # Use a single neuron with sigmoid for binary classification
 
-time_steps = 7
-X_seq, y_seq = create_sequences(X_scaled, y_scaled, time_steps)
-
-# Use all data for training
-X_train, y_train = X_seq, y_seq
-
-# Model
-model = Sequential([
-    Dense(32, activation='relu', input_shape=(
-        X_train.shape[1], X_train.shape[2])),
-    Dense(128, activation='relu'),
-    Dense(32, activation='relu'),
-    Dense(1)  # Output layer
-])
+model = Model(inputs=base_model.input, outputs=predictions)
 
 # Compile the model
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-model.compile(optimizer=optimizer, loss='mape')
+model.compile(optimizer=Adam(learning_rate=0.0001),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
 
-# Record the start time
-start_time = time.time()
+# Train the model
+epochs = 20
+history = model.fit(
+    train_dataset,
+    validation_data=val_dataset,
+    epochs=epochs
+)
 
-# Train the model with callback to record loss over epochs
-history = model.fit(X_train, y_train, epochs=70, batch_size=32, verbose=1)
+# Unfreeze the base model and fine-tune
+for layer in base_model.layers:
+    layer.trainable = True
 
-# Record the end time
-end_time = time.time()
+# Re-compile with a lower learning rate for fine-tuning
+model.compile(optimizer=Adam(learning_rate=0.1),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
 
-# Calculate the total training time
-total_training_time = end_time - start_time
-print(f"Total training time: {total_training_time:.2f} seconds")
+# Fine-tune the model
+fine_tune_epochs = 20
+total_epochs = epochs + fine_tune_epochs
 
-# Save the model
-model.save("dbn_model.pt")
+history_fine = model.fit(
+    train_dataset,
+    validation_data=val_dataset,
+    epochs=total_epochs,
+    initial_epoch=history.epoch[-1]
+)
 
-# Save the scalers
-with open('scaler_dbn_X.pkl', 'wb') as f:
-    pickle.dump(scaler_X, f)
-with open('scaler_dbn_y.pkl', 'wb') as f:
-    pickle.dump(scaler_y, f)
+# Save the model in the SavedModel format
+model_save_path = 'result2.h5'
+model.save(model_save_path, save_format='h5')
 
-# Save training loss to a CSV file for visualization
-loss_data = pd.DataFrame({
-    "Epoch": range(1, len(history.history['loss']) + 1),
-    "Loss": history.history['loss']
-})
-loss_data.to_csv('training_loss.csv', index=False)
+print(f"Model saved to {model_save_path}")
 
-# Output CSV path
-print("Training loss saved to 'training_loss.csv'")
+# Plot training and validation loss/accuracy
+def plot_training_history(history, fine_tuning_history=None):
+    plt.figure(figsize=(14, 6))
+
+    # Plot loss
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['loss'], label='Initial Training Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    if fine_tuning_history:
+        plt.plot(fine_tuning_history.history['loss'], label='Fine-tuning Loss')
+        plt.plot(fine_tuning_history.history['val_loss'], label='Fine-tuning Validation Loss')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid()
+
+    # Plot accuracy
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['accuracy'], label='Initial Training Accuracy')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+    if fine_tuning_history:
+        plt.plot(fine_tuning_history.history['accuracy'], label='Fine-tuning Accuracy')
+        plt.plot(fine_tuning_history.history['val_accuracy'], label='Fine-tuning Validation Accuracy')
+    plt.title('Training and Validation Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.grid()
+
+    plt.tight_layout()
+    plt.savefig('training_history.png')  # Save the chart as a PNG
+    plt.show()
+
+# Call the function to plot
+plot_training_history(history, fine_tuning_history=history_fine)
