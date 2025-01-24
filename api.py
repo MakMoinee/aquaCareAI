@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, send_file
 import os
 import pathlib
 import logging
+import mysql.connector
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from flask_cors import CORS
@@ -22,13 +23,26 @@ torch.hub._verbose = False
 temp = pathlib.PosixPath
 pathlib.PosixPath = pathlib.WindowsPath
 
+
+
+
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:8443"])
 
 # Load the model without showing cache loading and model summary
-with redirect_stdout(io.StringIO()):  # Suppress YOLOv5 stdout messages
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path='./result.pt', verbose=False)
-    model2 = torch.hub.load('ultralytics/yolov5', 'custom', path='./human.pt', verbose=False)
+with redirect_stdout(io.StringIO()):  # Suppress Xception stdout messages
+    model = torch.hub.load('../../whiteSpot/xception', 'custom', path='./result.pt',source='local', verbose=False)
+    model2 = torch.hub.load('../../whiteSpot/xception', 'custom', path='./human.pt',source='local', verbose=False)
+
+
+mydb = mysql.connector.connect(
+    host="127.0.0.1",
+    user="root",
+    password="Develop@2021",
+    database="aquacare"
+)
+
+mycursor = mydb.cursor()
 
 executor = ThreadPoolExecutor()
 
@@ -40,15 +54,30 @@ def detect():
 
     # Log when an image URL is received for detection
     image = request.form['image']
+    id = request.form['id']
     logger.info("Received image URL for detection in /detect")
-
     # Indicate detection process started
+    # try:
+    #     results2 = model2(image)
+    #     df2 = results2.pandas().xyxy[0]
+    #     check = df2.shape[0]
+    #     if check > 0:
+    #         detections = [{"detection": "human detected"}]
+    #         logger.info(f"Detected {check} humans and other stuff in picture.")
+    #     else:
+    #         detections = [{"detection": "in progress"}]
+    #         executor.submit(do_object_detection, image)
+    # except Exception as e:
+    #     logger.error(f"Error during detection: {e}")
+
     detections = [{"detection": "in progress"}]
-    executor.submit(do_object_detection, image)
+    executor.submit(do_object_detection, image,id)
+    
+    
 
     return jsonify({"detections": detections})
 
-def do_object_detection(image):
+def do_object_detection(image,id):
     
     try:
         results2 = model2(image)
@@ -57,12 +86,20 @@ def do_object_detection(image):
         
         if check > 0:
             logger.info(f"Detected {check} humans and other stuff in picture.")
+            sql = "INSERT INTO detection_results (detectionID,result,created_at,updated_at) VALUES (%s, %s,NOW(),NOW())"
+            val = (id, "not fish")
+            mycursor.execute(sql, val)
+            mydb.commit()
         else:
             try:
                 results = model(image)
+                
                 df = results.pandas().xyxy[0]
                 numberOfWhiteSpots = df.shape[0]
                 if numberOfWhiteSpots > 0:
+                    results.line_thickness = 2  # Change line weight of bounding boxes
+                    results.font_size = 2  # Change font size of labels
+                    results.hide_labels = True
                     results.save(save_dir="./results/", exist_ok=True)
                     logger.info(f"Detected {numberOfWhiteSpots} white spots and saved results.")
                 else:

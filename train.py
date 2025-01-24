@@ -97,8 +97,8 @@ history_fine = model.fit(
 )
 
 # Save the model in the SavedModel format
-model_save_path = 'result2.h5'
-model.save(model_save_path, save_format='h5')
+model_save_path = 'result2.pt'
+model.save(model_save_path, save_format='pt')
 
 print(f"Model saved to {model_save_path}")
 
