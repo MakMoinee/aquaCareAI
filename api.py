@@ -11,6 +11,15 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from flask_cors import CORS
 from contextlib import redirect_stdout
+import os
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+
+@contextmanager
+def suppress_stdout_stderr():
+    """A context manager that redirects stdout and stderr to devnull"""
+    with open(os.devnull, 'w') as fnull:
+        with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
+            yield (err, out)
 
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +39,9 @@ app = Flask(__name__)
 CORS(app, origins=["http://localhost:8443"])
 
 # Load the model without showing cache loading and model summary
-with redirect_stdout(io.StringIO()):  # Suppress Xception stdout messages
-    model = torch.hub.load('../../whiteSpot/xception', 'custom', path='./result.pt',source='local', verbose=False)
-    model2 = torch.hub.load('../../whiteSpot/xception', 'custom', path='./human.pt',source='local', verbose=False)
+with suppress_stdout_stderr():  # Suppress Xception stdout messages
+    model = torch.hub.load('../xception', 'custom', path='./result.pt',source='local', verbose=False)
+    model2 = torch.hub.load('../xception', 'custom', path='./human.pt',source='local', verbose=False)
 
 
 mydb = mysql.connector.connect(
@@ -131,7 +140,7 @@ def display_image(filename):
 if __name__ == "__main__":
     # Set Flask to only log critical errors
     log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
+    log.setLevel(logging.INFO)
     
     logger.info("Starting API server...")
     app.run()
