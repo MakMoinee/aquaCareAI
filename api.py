@@ -41,7 +41,7 @@ CORS(app, origins=["http://localhost:8443"])
 # Load the model without showing cache loading and model summary
 with suppress_stdout_stderr():  # Suppress Xception stdout messages
     model = torch.hub.load('../xception', 'custom', path='./result.pt',source='local', verbose=False)
-    model2 = torch.hub.load('../xception', 'custom', path='./human.pt',source='local', verbose=False)
+    model2 = torch.hub.load('../xception', 'custom', path='./fish.pt',source='local', verbose=False)
 
 
 mydb = mysql.connector.connect(
@@ -94,12 +94,6 @@ def do_object_detection(image,id):
         check = df2.shape[0]
         
         if check > 0:
-            logger.info(f"Detected {check} humans and other stuff in picture.")
-            sql = "INSERT INTO detection_results (detectionID,result,created_at,updated_at) VALUES (%s, %s,NOW(),NOW())"
-            val = (id, "not fish")
-            mycursor.execute(sql, val)
-            mydb.commit()
-        else:
             try:
                 results = model(image)
                 
@@ -115,6 +109,12 @@ def do_object_detection(image,id):
                     logger.info("No white spots detected.")
             except Exception as e:
                 logger.error(f"Error during detection: {e}")
+        else:
+            logger.info(f"Detected {check} humans and other stuff in picture.")
+            sql = "INSERT INTO detection_results (detectionID,result,created_at,updated_at) VALUES (%s, %s,NOW(),NOW())"
+            val = (id, "not fish")
+            mycursor.execute(sql, val)
+            mydb.commit()
     except Exception as e:
         logger.error(f"Error during detection: {e}")
 
